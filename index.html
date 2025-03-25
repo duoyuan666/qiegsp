@@ -112,6 +112,7 @@
             <p>3. 点击"开始分割"按钮</p>
             <p>4. 分割完成后，可以预览和下载各个片段</p>
             <p><strong>注意：</strong> 这是一个纯前端工具，视频不会上传到任何服务器，所有处理都在您的浏览器中完成。</p>
+            <p><strong>格式说明：</strong> 工具会尝试以MP4格式导出。如果您的浏览器不支持MP4录制，将自动回退到H.264 WebM或VP9 WebM格式，但会保留MP4文件扩展名以便使用。</p>
         </div>
 
         <div class="upload-section">
@@ -456,10 +457,24 @@
                 
                 // 创建MediaRecorder来录制视频片段
                 const stream = canvasElement.captureStream();
-                const mediaRecorder = new MediaRecorder(stream, {
-                    mimeType: 'video/webm;codecs=vp9',
+                
+                // 检测浏览器支持的视频格式，优先使用MP4
+                let mimeType = 'video/mp4';
+                let options = {
                     videoBitsPerSecond: 5000000 // 高比特率以保持质量
-                });
+                };
+                
+                // 如果浏览器不支持MP4录制，回退到WebM
+                if (!MediaRecorder.isTypeSupported(mimeType)) {
+                    if (MediaRecorder.isTypeSupported('video/webm;codecs=h264')) {
+                        mimeType = 'video/webm;codecs=h264';
+                    } else {
+                        mimeType = 'video/webm;codecs=vp9';
+                    }
+                    options.mimeType = mimeType;
+                }
+                
+                const mediaRecorder = new MediaRecorder(stream, options);
                 
                 const chunks = [];
                 mediaRecorder.ondataavailable = (e) => {
@@ -470,7 +485,7 @@
                 
                 mediaRecorder.onstop = () => {
                     // 创建Blob并添加到片段列表
-                    const blob = new Blob(chunks, { type: 'video/webm' });
+                    const blob = new Blob(chunks, { type: mediaRecorder.mimeType || 'video/mp4' });
                     const segmentURL = URL.createObjectURL(blob);
                     
                     // 添加到片段数组
@@ -570,7 +585,7 @@
         function downloadSegment(segment) {
             const a = document.createElement('a');
             a.href = segment.url;
-            a.download = `segment_${segment.index + 1}.webm`;
+            a.download = `segment_${segment.index + 1}.mp4`;
             a.click();
         }
 
@@ -586,7 +601,7 @@
             // 添加所有片段到ZIP
             for (let i = 0; i < segments.length; i++) {
                 const segment = segments[i];
-                zip.file(`segment_${i + 1}.webm`, segment.blob);
+                zip.file(`segment_${i + 1}.mp4`, segment.blob);
                 
                 // 更新进度
                 const progress = Math.round((i / segments.length) * 100);
