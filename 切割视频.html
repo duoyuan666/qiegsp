@@ -1,0 +1,622 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>5秒视频分割工具</title>
+    <style>
+        body {
+            font-family: 'Arial', sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background-color: white;
+            border-radius: 8px;
+            padding: 20px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        h1 {
+            text-align: center;
+            color: #333;
+        }
+        .upload-section, .video-preview, .segments-section, .progress-section {
+            margin: 20px 0;
+            padding: 15px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+        }
+        .btn {
+            background-color: #4CAF50;
+            color: white;
+            padding: 10px 15px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+            margin: 5px 0;
+        }
+        .btn:hover {
+            background-color: #45a049;
+        }
+        .btn-secondary {
+            background-color: #2196F3;
+        }
+        .btn-secondary:hover {
+            background-color: #0b7dda;
+        }
+        .btn-disabled {
+            background-color: #cccccc;
+            cursor: not-allowed;
+        }
+        #videoPreview {
+            max-width: 100%;
+            display: none;
+        }
+        .segment-item {
+            margin: 10px 0;
+            padding: 10px;
+            background: #f9f9f9;
+            border-radius: 4px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+        .segment-preview {
+            width: 160px;
+            height: 90px;
+            background: #000;
+            margin-right: 10px;
+        }
+        #progressBar {
+            width: 100%;
+            background-color: #ddd;
+            border-radius: 5px;
+            margin: 10px 0;
+        }
+        #progressFill {
+            height: 20px;
+            background-color: #4CAF50;
+            border-radius: 5px;
+            width: 0%;
+            transition: width 0.3s;
+            text-align: center;
+            line-height: 20px;
+            color: white;
+        }
+        .instructions {
+            margin: 20px 0;
+            padding: 15px;
+            background-color: #e7f3fe;
+            border-left: 5px solid #2196F3;
+        }
+        .hidden {
+            display: none;
+        }
+        #segmentContainer {
+            max-height: 400px;
+            overflow-y: auto;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>5秒视频分割工具</h1>
+        
+        <div class="instructions">
+            <h3>使用说明：</h3>
+            <p>1. 上传你的视频文件</p>
+            <p>2. 设置分割参数（默认每5秒一个片段）</p>
+            <p>3. 点击"开始分割"按钮</p>
+            <p>4. 分割完成后，可以预览和下载各个片段</p>
+            <p><strong>注意：</strong> 这是一个纯前端工具，视频不会上传到任何服务器，所有处理都在您的浏览器中完成。</p>
+        </div>
+
+        <div class="upload-section">
+            <h2>第一步：上传视频</h2>
+            <input type="file" id="videoInput" accept="video/*">
+            <p>支持的格式：MP4, WebM, Ogg 等大多数现代浏览器支持的视频格式</p>
+        </div>
+
+        <div class="video-preview hidden" id="previewSection">
+            <h2>第二步：视频预览</h2>
+            <video id="videoPreview" controls></video>
+            <div>
+                <p>视频信息：</p>
+                <p id="videoDuration">时长：加载中...</p>
+                <p id="videoResolution">分辨率：加载中...</p>
+            </div>
+        </div>
+
+        <div class="settings-section hidden" id="settingsSection">
+            <h2>第三步：设置参数</h2>
+            <label for="segmentLength">片段长度（秒）：</label>
+            <input type="number" id="segmentLength" value="5" min="1" max="60">
+            <br><br>
+            <label for="sceneThreshold">场景变化阈值 (0-100，较低的值会创建更多片段)：</label>
+            <input type="range" id="sceneThreshold" min="5" max="50" value="25" step="5">
+            <span id="thresholdValue">25</span>
+            <br><br>
+            <button id="startSegmentation" class="btn">开始分割</button>
+        </div>
+
+        <div class="progress-section hidden" id="progressSection">
+            <h2>处理中...</h2>
+            <div id="progressBar">
+                <div id="progressFill">0%</div>
+            </div>
+            <p id="progressStatus">准备中...</p>
+        </div>
+
+        <div class="segments-section hidden" id="segmentsSection">
+            <h2>第四步：视频片段</h2>
+            <p>共创建了 <span id="segmentCount">0</span> 个片段</p>
+            <button id="downloadAll" class="btn btn-secondary">下载所有片段（ZIP）</button>
+            <div id="segmentContainer"></div>
+        </div>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <script>
+        // 全局变量
+        let videoFile;
+        let videoElement;
+        let canvasElement;
+        let canvasContext;
+        let segments = [];
+        let processingComplete = false;
+        
+        // DOM 元素
+        const videoInput = document.getElementById('videoInput');
+        const videoPreview = document.getElementById('videoPreview');
+        const previewSection = document.getElementById('previewSection');
+        const settingsSection = document.getElementById('settingsSection');
+        const progressSection = document.getElementById('progressSection');
+        const segmentsSection = document.getElementById('segmentsSection');
+        const videoDuration = document.getElementById('videoDuration');
+        const videoResolution = document.getElementById('videoResolution');
+        const startSegmentation = document.getElementById('startSegmentation');
+        const progressFill = document.getElementById('progressFill');
+        const progressStatus = document.getElementById('progressStatus');
+        const segmentContainer = document.getElementById('segmentContainer');
+        const segmentCount = document.getElementById('segmentCount');
+        const downloadAll = document.getElementById('downloadAll');
+        const segmentLength = document.getElementById('segmentLength');
+        const sceneThreshold = document.getElementById('sceneThreshold');
+        const thresholdValue = document.getElementById('thresholdValue');
+
+        // 初始化
+        document.addEventListener('DOMContentLoaded', () => {
+            // 创建离屏canvas用于分析帧
+            canvasElement = document.createElement('canvas');
+            canvasContext = canvasElement.getContext('2d', { willReadFrequently: true });
+            
+            // 添加事件监听器
+            videoInput.addEventListener('change', handleVideoUpload);
+            startSegmentation.addEventListener('change', startVideoSegmentation);
+            downloadAll.addEventListener('click', downloadAllSegments);
+            sceneThreshold.addEventListener('input', updateThresholdValue);
+            
+            // 初始化显示阈值
+            updateThresholdValue();
+        });
+
+        // 更新阈值显示
+        function updateThresholdValue() {
+            thresholdValue.textContent = sceneThreshold.value;
+        }
+
+        // 处理视频上传
+        function handleVideoUpload(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+            
+            videoFile = file;
+            const videoURL = URL.createObjectURL(file);
+            
+            videoPreview.src = videoURL;
+            videoPreview.style.display = 'block';
+            previewSection.classList.remove('hidden');
+            
+            // 加载视频元数据
+            videoPreview.onloadedmetadata = () => {
+                videoDuration.textContent = `时长：${formatTime(videoPreview.duration)}`;
+                settingsSection.classList.remove('hidden');
+                
+                // 获取视频分辨率
+                videoPreview.onloadeddata = () => {
+                    videoResolution.textContent = `分辨率：${videoPreview.videoWidth} x ${videoPreview.videoHeight}`;
+                };
+            };
+            
+            // 点击开始分割
+            startSegmentation.onclick = startVideoSegmentation;
+        }
+
+        // 格式化时间（秒 -> 分:秒）
+        function formatTime(seconds) {
+            const minutes = Math.floor(seconds / 60);
+            const remainingSeconds = Math.floor(seconds % 60);
+            return `${minutes}:${remainingSeconds < 10 ? '0' : ''}${remainingSeconds}`;
+        }
+
+        // 开始视频分割处理
+        function startVideoSegmentation() {
+            // 重置之前的状态
+            segments = [];
+            segmentContainer.innerHTML = '';
+            segmentCount.textContent = '0';
+            
+            // 显示进度部分
+            progressSection.classList.remove('hidden');
+            settingsSection.classList.add('hidden');
+            
+            // 设置canvas大小与视频相同
+            canvasElement.width = videoPreview.videoWidth;
+            canvasElement.height = videoPreview.videoHeight;
+            
+            // 获取分割参数
+            const segmentDuration = parseFloat(segmentLength.value);
+            const threshold = parseInt(sceneThreshold.value);
+            
+            // 开始处理
+            processVideo(segmentDuration, threshold);
+        }
+
+        // 视频处理主函数
+        async function processVideo(segmentDuration, threshold) {
+            const video = videoPreview;
+            const duration = video.duration;
+            const totalSegments = Math.ceil(duration / segmentDuration);
+            
+            progressStatus.textContent = `准备分析视频...`;
+            
+            // 先分析整个视频找出场景变化点
+            const sceneChanges = await analyzeScenes(video, threshold);
+            
+            progressStatus.textContent = `分析完成，开始创建片段...`;
+            
+            // 基于场景变化和5秒规则创建片段
+            let currentSegments = createSegmentsFromScenes(sceneChanges, duration, segmentDuration);
+            
+            // 开始逐一处理每个片段
+            for (let i = 0; i < currentSegments.length; i++) {
+                const segment = currentSegments[i];
+                progressStatus.textContent = `正在处理片段 ${i+1}/${currentSegments.length}...`;
+                
+                // 更新进度条
+                const progress = Math.round((i / currentSegments.length) * 100);
+                progressFill.style.width = `${progress}%`;
+                progressFill.textContent = `${progress}%`;
+                
+                // 创建片段
+                await createVideoSegment(video, segment.start, segment.end, i);
+                
+                // 短暂暂停，让UI有时间更新
+                await new Promise(resolve => setTimeout(resolve, 50));
+            }
+            
+            // 完成
+            progressFill.style.width = '100%';
+            progressFill.textContent = '100%';
+            progressStatus.textContent = '处理完成！';
+            
+            // 显示片段部分
+            segmentsSection.classList.remove('hidden');
+            segmentCount.textContent = segments.length.toString();
+            
+            processingComplete = true;
+        }
+
+        // 分析视频中的场景变化
+        async function analyzeScenes(video, threshold) {
+            const sceneChanges = [0]; // 总是从0开始
+            const frameSkip = 5; // 每隔多少帧分析一次（提高性能）
+            const normalizedThreshold = threshold / 100 * 255 * 3; // 转换为RGB差异阈值
+            
+            let previousImageData = null;
+            
+            // 设置视频到开始
+            video.currentTime = 0;
+            
+            // 等待视频加载到开始位置
+            await new Promise(resolve => {
+                video.onseeked = resolve;
+            });
+            
+            const fps = 30; // 假设30fps
+            const totalFrames = Math.floor(video.duration * fps);
+            
+            for (let frameIdx = 0; frameIdx < totalFrames; frameIdx += frameSkip) {
+                // 设置视频到特定时间
+                const currentTime = frameIdx / fps;
+                if (currentTime >= video.duration) break;
+                
+                video.currentTime = currentTime;
+                
+                // 等待视频寻址完成
+                await new Promise(resolve => {
+                    video.onseeked = resolve;
+                });
+                
+                // 将当前帧绘制到canvas
+                canvasContext.drawImage(video, 0, 0, canvasElement.width, canvasElement.height);
+                
+                // 获取图像数据
+                const imageData = canvasContext.getImageData(0, 0, canvasElement.width, canvasElement.height);
+                
+                // 如果有之前的帧，比较差异
+                if (previousImageData) {
+                    const diff = compareFrames(previousImageData, imageData);
+                    
+                    // 如果差异超过阈值，记录为场景变化
+                    if (diff > normalizedThreshold) {
+                        sceneChanges.push(currentTime);
+                    }
+                }
+                
+                previousImageData = imageData;
+                
+                // 更新进度
+                const progress = Math.round((currentTime / video.duration) * 50); // 分析阶段占总进度的50%
+                progressFill.style.width = `${progress}%`;
+                progressFill.textContent = `${progress}%`;
+                progressStatus.textContent = `分析视频场景中... ${Math.round(currentTime)}/${Math.round(video.duration)}秒`;
+            }
+            
+            return sceneChanges;
+        }
+
+        // 比较两帧之间的差异
+        function compareFrames(prev, curr) {
+            const data1 = prev.data;
+            const data2 = curr.data;
+            
+            // 为了提高性能，我们只对比部分像素点
+            const sampleSize = Math.floor(data1.length / 4 / 100); // 取1%的像素
+            let totalDiff = 0;
+            
+            for (let i = 0; i < sampleSize; i++) {
+                const idx = Math.floor(Math.random() * data1.length / 4) * 4;
+                
+                // 计算RGB差异
+                const rDiff = Math.abs(data1[idx] - data2[idx]);
+                const gDiff = Math.abs(data1[idx + 1] - data2[idx + 1]);
+                const bDiff = Math.abs(data1[idx + 2] - data2[idx + 2]);
+                
+                totalDiff += (rDiff + gDiff + bDiff);
+            }
+            
+            // 计算平均差异
+            return totalDiff / sampleSize;
+        }
+
+        // 基于场景变化和时长创建片段
+        function createSegmentsFromScenes(sceneChanges, duration, segmentDuration) {
+            const segments = [];
+            
+            // 确保场景变化点是有序的
+            sceneChanges.sort((a, b) => a - b);
+            
+            // 如果没有足够的场景变化，按固定时间分割
+            if (sceneChanges.length < 2) {
+                for (let time = 0; time < duration; time += segmentDuration) {
+                    segments.push({
+                        start: time,
+                        end: Math.min(time + segmentDuration, duration)
+                    });
+                }
+                return segments;
+            }
+            
+            // 结合场景变化和固定时长创建片段
+            let currentTime = 0;
+            
+            while (currentTime < duration) {
+                // 找出当前时间之后最近的场景变化点
+                let nextSceneChange = null;
+                
+                for (const time of sceneChanges) {
+                    if (time > currentTime) {
+                        nextSceneChange = time;
+                        break;
+                    }
+                }
+                
+                // 如果没有更多场景变化点，使用视频结束点
+                if (nextSceneChange === null || nextSceneChange > currentTime + segmentDuration) {
+                    nextSceneChange = currentTime + segmentDuration;
+                }
+                
+                // 创建片段
+                segments.push({
+                    start: currentTime,
+                    end: Math.min(nextSceneChange, duration)
+                });
+                
+                // 更新当前时间
+                currentTime = nextSceneChange;
+            }
+            
+            return segments;
+        }
+
+        // 创建视频片段
+        async function createVideoSegment(video, startTime, endTime, index) {
+            return new Promise(async (resolve) => {
+                // 设置视频到开始位置
+                video.currentTime = startTime;
+                
+                // 等待视频寻址完成
+                await new Promise(seekResolve => {
+                    video.onseeked = seekResolve;
+                });
+                
+                // 创建MediaRecorder来录制视频片段
+                const stream = canvasElement.captureStream();
+                const mediaRecorder = new MediaRecorder(stream, {
+                    mimeType: 'video/webm;codecs=vp9',
+                    videoBitsPerSecond: 5000000 // 高比特率以保持质量
+                });
+                
+                const chunks = [];
+                mediaRecorder.ondataavailable = (e) => {
+                    if (e.data.size > 0) {
+                        chunks.push(e.data);
+                    }
+                };
+                
+                mediaRecorder.onstop = () => {
+                    // 创建Blob并添加到片段列表
+                    const blob = new Blob(chunks, { type: 'video/webm' });
+                    const segmentURL = URL.createObjectURL(blob);
+                    
+                    // 添加到片段数组
+                    segments.push({
+                        index: index,
+                        startTime: startTime,
+                        endTime: endTime,
+                        duration: endTime - startTime,
+                        url: segmentURL,
+                        blob: blob
+                    });
+                    
+                    // 创建UI元素显示片段
+                    addSegmentToUI(segments[segments.length - 1]);
+                    
+                    resolve();
+                };
+                
+                // 开始录制
+                mediaRecorder.start();
+                
+                // 设置动画以绘制帧
+                const fps = 30;
+                const frameDuration = 1000 / fps;
+                const segmentDuration = (endTime - startTime) * 1000; // 转为毫秒
+                let elapsed = 0;
+                
+                const drawFrame = async () => {
+                    if (elapsed >= segmentDuration) {
+                        mediaRecorder.stop();
+                        return;
+                    }
+                    
+                    // 计算当前帧的时间
+                    const frameTime = startTime + (elapsed / 1000);
+                    
+                    // 设置视频到该时间
+                    video.currentTime = frameTime;
+                    
+                    // 等待视频寻址完成
+                    await new Promise(seekResolve => {
+                        video.onseeked = seekResolve;
+                    });
+                    
+                    // 绘制到canvas
+                    canvasContext.drawImage(video, 0, 0, canvasElement.width, canvasElement.height);
+                    
+                    // 更新已经过的时间
+                    elapsed += frameDuration;
+                    
+                    // 继续下一帧
+                    setTimeout(drawFrame, 0);
+                };
+                
+                // 开始绘制
+                drawFrame();
+            });
+        }
+
+        // 将片段添加到UI
+        function addSegmentToUI(segment) {
+            const segmentItem = document.createElement('div');
+            segmentItem.className = 'segment-item';
+            
+            // 创建预览视频
+            const video = document.createElement('video');
+            video.src = segment.url;
+            video.controls = true;
+            video.className = 'segment-preview';
+            video.style.width = '160px';
+            video.style.height = '90px';
+            
+            // 创建信息文本
+            const info = document.createElement('div');
+            info.innerHTML = `
+                <p>片段 ${segment.index + 1}</p>
+                <p>开始: ${formatTime(segment.startTime)} | 结束: ${formatTime(segment.endTime)}</p>
+                <p>时长: ${segment.duration.toFixed(2)}秒</p>
+            `;
+            
+            // 创建下载按钮
+            const downloadBtn = document.createElement('button');
+            downloadBtn.className = 'btn';
+            downloadBtn.textContent = '下载';
+            downloadBtn.onclick = () => {
+                downloadSegment(segment);
+            };
+            
+            // 添加到DOM
+            segmentItem.appendChild(video);
+            segmentItem.appendChild(info);
+            segmentItem.appendChild(downloadBtn);
+            segmentContainer.appendChild(segmentItem);
+        }
+
+        // 下载单个片段
+        function downloadSegment(segment) {
+            const a = document.createElement('a');
+            a.href = segment.url;
+            a.download = `segment_${segment.index + 1}.webm`;
+            a.click();
+        }
+
+        // 下载所有片段（ZIP）
+        async function downloadAllSegments() {
+            if (segments.length === 0) return;
+            
+            progressSection.classList.remove('hidden');
+            progressStatus.textContent = '正在准备ZIP文件...';
+            
+            const zip = new JSZip();
+            
+            // 添加所有片段到ZIP
+            for (let i = 0; i < segments.length; i++) {
+                const segment = segments[i];
+                zip.file(`segment_${i + 1}.webm`, segment.blob);
+                
+                // 更新进度
+                const progress = Math.round((i / segments.length) * 100);
+                progressFill.style.width = `${progress}%`;
+                progressFill.textContent = `${progress}%`;
+                progressStatus.textContent = `正在添加片段 ${i+1}/${segments.length} 到ZIP...`;
+                
+                // 短暂暂停，让UI有时间更新
+                await new Promise(resolve => setTimeout(resolve, 50));
+            }
+            
+            // 生成ZIP文件
+            progressStatus.textContent = '正在生成ZIP文件...';
+            const blob = await zip.generateAsync({type: 'blob'});
+            
+            // 下载ZIP
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(blob);
+            a.download = 'video_segments.zip';
+            a.click();
+            
+            progressStatus.textContent = 'ZIP文件已下载！';
+            
+            // 几秒后隐藏进度部分
+            setTimeout(() => {
+                if (processingComplete) {
+                    progressSection.classList.add('hidden');
+                }
+            }, 3000);
+        }
+    </script>
+</body>
+</html>
